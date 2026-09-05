@@ -1,0 +1,1 @@
+.terraform/echo *.tfstateecho *.tfstate.*echo .envecho node_modules/echo __pycache__/echo .pytest_cache/echo *.pycecho .venv/echo build/
