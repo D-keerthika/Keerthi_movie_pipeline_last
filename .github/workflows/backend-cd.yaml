@@ -1,0 +1,82 @@
+name: Backend Continuous Deployment
+
+on:
+  push:
+    paths:
+      - 'starter/backend/**'
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  lint:
+    name: Lint Backend Source
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: starter/backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+      - run: pip install pipenv && pipenv install --dev
+      - run: pipenv run lint
+
+  test:
+    name: Run Backend Unit Tests
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: starter/backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+      - run: pip install pipenv && pipenv install --dev
+      - run: pipenv run test
+
+  deploy:
+    name: Release Backend to EKS
+    runs-on: ubuntu-latest
+    needs: [lint, test]
+    defaults:
+      run:
+        working-directory: starter/backend
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup AWS Session Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: us-east-1
+
+      - name: Authenticate Docker to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build, Tag, and Push Backend Docker Image
+        env:
+          REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          REPO_NAME: backend
+          TAG: ${{ github.sha }}
+        run: |
+          docker build -t $REGISTRY/$REPO_NAME:$TAG .
+          docker push $REGISTRY/$REPO_NAME:$TAG
+
+      - name: Configure EKS Cluster Context
+        run: aws eks update-kubeconfig --name cluster --region us-east-1
+
+      - name: Deploy Backend Manifests via Kustomize
+        env:
+          REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          REPO_NAME: backend
+          TAG: ${{ github.sha }}
+        run: |
+          cd k8s
+          kustomize edit set image backend=$REGISTRY/$REPO_NAME:$TAG
+          kustomize build | kubectl apply -f -
